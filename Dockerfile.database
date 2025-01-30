@@ -1,0 +1,18 @@
+# Autor: Daniel Benjamin Perez Morales
+# GitHub: https://github.com/DanielBenjaminPerezMoralesDev13
+# GitLab: https://gitlab.com/DanielBenjaminPerezMoralesDev13
+# Correo electrónico: danielperezdev@proton.me
+
+ARG Tag=17.2-alpine
+FROM postgres:${Tag}
+EXPOSE 5432/tcp
+WORKDIR /App
+COPY ./sql ./sql
+LABEL maintainer="Daniel Benjamin Perez Morales"
+LABEL email="danielperezdev@proton.me"
+LABEL nickname="D4nitrix13"
+USER postgres
+CMD [ "postgres" ]
+
+# Execute Commando (Host)
+# docker container exec -itu0 -ePGPASSWORD=root container-db psql -hlocalhost -Upostgres -p5432 -dlocal_drive -ac"select * from directory"
