@@ -1,0 +1,17 @@
+# Autor: Daniel Benjamin Perez Morales
+# GitHub: https://github.com/DanielBenjaminPerezMoralesDev13
+# GitLab: https://gitlab.com/DanielBenjaminPerezMoralesDev13
+# Correo electrónico: danielperezdev@proton.me
+
+.git
+.*
+sessions/
+scripts/
+Logs/
+Docs
+Directory*
+*.md
+php.ini
+docker-compose.yaml
+Dockerfile*
+secrets
