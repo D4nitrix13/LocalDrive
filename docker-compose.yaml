@@ -1,0 +1,74 @@
+# Autor: Daniel Benjamin Perez Morales
+# GitHub: https://github.com/DanielBenjaminPerezMoralesDev13
+# GitLab: https://gitlab.com/DanielBenjaminPerezMoralesDev13
+# Correo electrónico: danielperezdev@proton.me
+
+# Not Execute
+# docker compose pull --include-deps --policy always
+
+# Comandos A Ejecutar
+
+# Init Services
+# docker compose --profile dev --file docker-compose.yaml --project-name localdrive --project-directory ./ up --build --timestamps --remove-orphans --pull always --timeout 10 --detach
+
+# Config Database
+# docker container exec -itu0 -ePGPASSWORD=root container-db psql -hlocalhost -Upostgres -p5432 -f /App/sql/setup.sql
+
+# Verificar La Base De Datos
+# docker container exec -itePGPASSWORD=root container-db psql -hlocalhost -Upostgres -p5432 -dlocal_drive
+
+# Delete Services
+# docker compose --project-name localdrive --project-directory "$(pwd)" down --remove-orphans --timeout 10 --volumes --rmi local --volumes
+
+# Optional (version: '3.8')
+version: '3.8'
+
+secrets:
+  POSTGRES_PASSWORD:
+    file: ./secrets/POSTGRES_PASSWORD.txt
+
+services:
+  db:
+    container_name: container-db
+    build:
+      context: ./
+      dockerfile: Dockerfile.database
+    image: db-localdrive:1.0.0
+    secrets:
+      - POSTGRES_PASSWORD
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/POSTGRES_PASSWORD
+    expose:
+      - 5432
+    pull_policy: always
+    networks:
+      - network
+    ports:
+      - 5432:5432
+    profiles:
+      - dev
+  app:
+    container_name: container-app
+    depends_on:
+      - db
+    build:
+      context: ./
+      dockerfile: Dockerfile
+    image: app-localdrive:1.0.0
+    networks:
+      - network
+    expose:
+      - 80
+    ports:
+      - 8080:80
+    volumes:
+      - data:/var/www/html/
+    profiles:
+      - dev
+
+networks:
+  network:
+
+volumes:
+  data:
+    driver: local
