@@ -10,7 +10,7 @@ RUN  apt-get update && \
     docker-php-ext-install pdo_pgsql && \
     mkdir -p /var/www/html/logs; touch /var/www/html/logs/access.log /var/www/html/logs/error.log
 COPY --chown=d4nitrix13:d4nitrix13 ./ ./
-RUN [ "mv", "./conf/apache2.conf", "/etc/apache2/apache2.conf" ]
+RUN [ "mv", "./config/apache2.conf", "/etc/apache2/apache2.conf" ]
 COPY --chown=d4nitrix13:d4nitrix13 --from=jwilder/dockerize /bin/dockerize /bin/dockerize
 # CMD-SHELL: CMD dockerize -wait http://172.18.0.2:80 -stdout /var/www/html/logs/access.log -stderr /var/www/html/logs/access.log -wait-retry-interval 1s -timeout 10s
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
@@ -49,3 +49,6 @@ CMD [ "apache2", "-D", "FOREGROUND" ]
 
 # Command Developer
 # docker run -itdePOSTGRES_PASSWORD=root -p5432:5432 --expose 5432 --network bridge --name DatabaseLocalDrive postgres:latest
+
+# Foros
+# https://stackoverflow.com/questions/24659300/how-to-use-docker-images-filter#24659756
