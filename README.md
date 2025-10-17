@@ -1,6 +1,6 @@
 <!-- Autor: Daniel Benjamin Perez Morales -->
-<!-- GitHub: https://github.com/DanielBenjaminPerezMoralesDev13 -->
-<!-- GitLab: https://gitlab.com/DanielBenjaminPerezMoralesDev13 -->
+<!-- GitHub: https://github.com/D4nitrix13 -->
+<!-- GitLab: https://gitlab.com/D4nitrix13 -->
 <!-- Correo electrónico: danielperezdev@proton.me -->
 
 # **LocalDrive**
@@ -174,7 +174,7 @@ cat secrets/POSTGRES_PASSWORD.txt
 *Para obtener el código fuente del proyecto, clona el repositorio desde GitHub con el siguiente comando:*
 
 ```bash
-git clone git@github.com:DanielBenjaminPerezMoralesDev13/LocalDrive.git --depth=1 --verbose --ipv4 --progress ~/LocalDrive
+git clone git@github.com:D4nitrix13/LocalDrive.git --depth=1 --verbose --ipv4 --progress ~/LocalDrive
 cd ~/LocalDrive
 ```  
 
