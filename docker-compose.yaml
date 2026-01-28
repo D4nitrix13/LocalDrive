@@ -1,25 +1,3 @@
-# Autor: Daniel Benjamin Perez Morales
-# GitHub: https://github.com/DanielBenjaminPerezMoralesDev13
-# GitLab: https://gitlab.com/DanielBenjaminPerezMoralesDev13
-# Correo electrónico: danielperezdev@proton.me
-
-# Not Execute
-# docker compose pull --include-deps --policy always
-
-# Comandos A Ejecutar
-
-# Init Services
-# docker compose --profile dev --file docker-compose.yaml --project-name localdrive --project-directory ./ up --build --timestamps --remove-orphans --pull always --timeout 10 --detach
-
-# Config Database
-# docker container exec -itu0 -ePGPASSWORD=root container-db psql -hlocalhost -Upostgres -p5432 -f /App/sql/setup.sql
-
-# Verificar La Base De Datos
-# docker container exec -itePGPASSWORD=root container-db psql -hlocalhost -Upostgres -p5432 -dlocal_drive
-
-# Delete Services
-# docker compose --project-name localdrive --project-directory "$(pwd)" down --remove-orphans --timeout 10 --volumes --rmi local --volumes
-
 # Optional (version: '3.8')
 version: '3.8'
 
@@ -39,14 +17,15 @@ services:
     environment:
       POSTGRES_PASSWORD_FILE: /run/secrets/POSTGRES_PASSWORD
     expose:
-      - 5432
+      - "5432/tcp"
     pull_policy: always
     networks:
       - network
     ports:
-      - 5432:5432
+      - "5433:5432" # host:container
     profiles:
       - dev
+
   app:
     container_name: container-app
     depends_on:
@@ -58,9 +37,9 @@ services:
     networks:
       - network
     expose:
-      - 80
+      - "80/tcp"
     ports:
-      - 8080:80
+      - "8080:80/tcp"
     volumes:
       - data:/var/www/html/
     profiles:
@@ -68,6 +47,7 @@ services:
 
 networks:
   network:
+
 
 volumes:
   data:

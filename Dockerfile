@@ -3,34 +3,58 @@
 # GitLab: https://gitlab.com/DanielBenjaminPerezMoralesDev13
 # Correo electrónico: danielperezdev@proton.me
 
-ARG Tag=8.4-apache-bullseye
-FROM php:${Tag}
-RUN  apt-get update && \
+ARG TAG=8.4-apache-bullseye
+
+# Stage 1: obtener dockerize
+FROM jwilder/dockerize AS dockerize
+
+# Stage 2: imagen final PHP + Apache
+FROM php:${TAG}
+
+# Instalación de dependencias y preparación
+RUN apt-get update && \
     apt-get install -y libpq-dev tini && \
     docker-php-ext-install pdo_pgsql && \
-    mkdir -p /var/www/html/logs; touch /var/www/html/logs/access.log /var/www/html/logs/error.log
+    mkdir -p /var/www/html/logs && \
+    touch /var/www/html/logs/access.log /var/www/html/logs/error.log && \
+    useradd -m d4nitrix13
+
+WORKDIR /var/www/html
+
+# Copiar el código de la app con el propietario correcto
 COPY --chown=d4nitrix13:d4nitrix13 ./ ./
-RUN [ "mv", "./config/apache2.conf", "/etc/apache2/apache2.conf" ]
-COPY --chown=d4nitrix13:d4nitrix13 --from=jwilder/dockerize /bin/dockerize /bin/dockerize
-# CMD-SHELL: CMD dockerize -wait http://172.18.0.2:80 -stdout /var/www/html/logs/access.log -stderr /var/www/html/logs/access.log -wait-retry-interval 1s -timeout 10s
+
+# Sustituir la configuración de Apache
+RUN ["mv", "./config/apache2.conf", "/etc/apache2/apache2.conf"]
+
+# Copiar dockerize desde el stage anterior
+COPY --from=dockerize /usr/local/bin/dockerize /usr/local/bin/dockerize
+
+# HEALTHCHECK usando el nombre del servicio en lugar de la IP
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD [ "dockerize", "-wait", "http://172.18.0.3:80", "-stdout", "/var/www/html/logs/access.log", "-stderr", "/var/www/html/logs/access.log", "-wait-retry-interval", "1s", "-timeout", "10s" ]
-ENTRYPOINT [ "tini", "--" ]
-EXPOSE 80/tcp
+    CMD [ "dockerize", "-wait", "http://app:80", "-stdout", "/var/www/html/logs/access.log", "-stderr", "/var/www/html/logs/error.log", "-wait-retry-interval", "1s", "-timeout", "10s" ]
+
+ENTRYPOINT ["tini", "--"]
+
+EXPOSE 80
+
 SHELL ["/bin/bash", "-c"]
 STOPSIGNAL SIGTERM
-RUN useradd -m d4nitrix13
+
 USER d4nitrix13
-LABEL maintainer="Daniel Benjamin Perez Morales"
-LABEL email="danielperezdev@proton.me"
-LABEL nickname="D4nitrix13"
-ENV APACHE_RUN_DIR=/var/run/apache2
-ENV APACHE_LOCK_DIR=/var/lock/apache2
-ENV APACHE_LOG_DIR=/var/log/apache2
-ENV APACHE_PID_FILE=/var/run/apache2/apache2.pid
-ENV APACHE_RUN_USER=www-data
-ENV APACHE_RUN_GROUP=www-data
-CMD [ "apache2", "-D", "FOREGROUND" ]
+
+LABEL maintainer="Daniel Benjamin Perez Morales" \
+    email="danielperezdev@proton.me" \
+    nickname="D4nitrix13"
+
+ENV APACHE_RUN_DIR=/var/run/apache2 \
+    APACHE_LOCK_DIR=/var/lock/apache2 \
+    APACHE_LOG_DIR=/var/log/apache2 \
+    APACHE_PID_FILE=/var/run/apache2/apache2.pid \
+    APACHE_RUN_USER=www-data \
+    APACHE_RUN_GROUP=www-data
+
+CMD ["apache2", "-D", "FOREGROUND"]
 
 # Foros
 # https://serverfault.com/questions/558283/apache2-config-variable-is-not-defined
