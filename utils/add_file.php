@@ -1,5 +1,5 @@
 <?php
-require_once __DIR__ . '/sql/mongo_logger.php';
+require_once __DIR__ . '/../sql/mongo_logger.php';
 
 // Devuelve true si el archivo no existe aún
 if (!file_exists($pathFile)) {

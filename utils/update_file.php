@@ -1,5 +1,5 @@
 <?php
-require_once __DIR__ . '/sql/mongo_logger.php';
+require_once __DIR__ . '/../sql/mongo_logger.php';
 
 move_uploaded_file($tmpNameFile, $pathFile);
 

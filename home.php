@@ -5,6 +5,7 @@ if (!isset($_SESSION["user"])) {
     header("Location: ./register.php");
     exit();
 }
+
 $error = null;
 
 $connection = require_once "./sql/db.php";
@@ -18,78 +19,88 @@ require_once "./utils/directory_size.php";
 
 $redis = redis_client();
 
+// Obtener todos los directorios del usuario
 $statement = $connection->prepare("SELECT * FROM directory WHERE id_user = :id_user");
 $statement->execute([
     ":id_user" => $_SESSION["user"]["id"]
 ]);
 
-// * Lista De Directorios Existentes Para El User Actual
+// Lista de directorios existentes
 $listExistingDirectory = $statement->fetchAll(PDO::FETCH_ASSOC);
-$directoryPrincipal = "{$listExistingDirectory[0]["path"]}";
 
-// List of valid directories
-$listOfValidDirectories = array();
-for ($i = 0; $i < count($listExistingDirectory); $i++) {
-    $listOfValidDirectories[] = addslashes($listExistingDirectory[$i]["path"]);
+if (empty($listExistingDirectory)) {
+    die("[x] No existen directorios para este usuario.");
 }
 
+$directoryPrincipal = "{$listExistingDirectory[0]['path']}";
+
+// Lista de directorios válidos
+$listOfValidDirectories = [];
+foreach ($listExistingDirectory as $dir) {
+    $listOfValidDirectories[] = addslashes($dir["path"]);
+}
+
+// Si es GET sin query string, redirigimos al directorio principal
 if ($_SERVER["REQUEST_METHOD"] === "GET" && !isset($_SERVER["QUERY_STRING"])) {
-    header("Location: .{$_SERVER['PHP_SELF']}?directory=$directoryPrincipal");
+    header("Location: .{$_SERVER['PHP_SELF']}?directory=" . urlencode($directoryPrincipal));
     exit();
 }
 
 $index = null;
 
-// * Esta Array Asociativo Almacena Los Query Params Con Su Key => Value Para Luego Verificar Que El Valor De La Key directory Es La Correspondiente
+// Procesar query string (cambiar de directorio, etc.)
 if ($_SERVER["REQUEST_METHOD"] === "GET" && isset($_SERVER["QUERY_STRING"])) {
-    $listQueryStringDirectory = array();
+    $listQueryStringDirectory = [];
     parse_str($_SERVER["QUERY_STRING"], $listQueryStringDirectory);
 
     if (
-        !in_array("directory", array_keys($listQueryStringDirectory)) ||
-        !in_array($listQueryStringDirectory["directory"], $listOfValidDirectories)
+        !array_key_exists("directory", $listQueryStringDirectory) ||
+        !in_array($listQueryStringDirectory["directory"], $listOfValidDirectories, true)
     ) {
-        header("Location: .{$_SERVER['PHP_SELF']}?directory=$directoryPrincipal");
+        header("Location: .{$_SERVER['PHP_SELF']}?directory=" . urlencode($directoryPrincipal));
         exit();
     }
 
     $index = array_search($listQueryStringDirectory["directory"], $listOfValidDirectories, true);
 
     if ($index === false) {
-        echo "[x] Error El Directory {$listQueryStringDirectory["directory"]} Not Exist";
+        echo "[x] Error: el directorio {$listQueryStringDirectory['directory']} no existe";
         exit();
     }
 
-    $_SESSION["directoryPath"] = "$listOfValidDirectories[$index]";
+    $_SESSION["directoryPath"] = $listOfValidDirectories[$index];
 }
 
+// Procesar POST (crear directorio, subir archivo, etc.)
 if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_SESSION["directoryPath"])) {
     $directoryActual = $_SESSION["directoryPath"];
 
-    if (!in_array($directoryActual, $listOfValidDirectories)) {
-        header("Location: .{$_SERVER['PHP_SELF']}?directory=$directoryPrincipal");
+    if (!in_array($directoryActual, $listOfValidDirectories, true)) {
+        header("Location: .{$_SERVER['PHP_SELF']}?directory=" . urlencode($directoryPrincipal));
         exit();
     }
 
     $index = array_search($directoryActual, $listOfValidDirectories, true);
 
     if ($index === false) {
-        echo "[x] Error El Directory $directoryActual Not Exist";
+        echo "[x] Error: el directorio $directoryActual no existe";
         exit();
     }
 
-    $_SESSION["directoryPath"] = "$listOfValidDirectories[$index]";
+    $_SESSION["directoryPath"] = $listOfValidDirectories[$index];
 }
 
-// En esta variable almacenaramos los subdirectorios
-$listSubDirectory = array();
+// En esta variable almacenamos los subdirectorios
+$listSubDirectory = [];
+
+// Directorio actual del usuario
 $directoryUser = $listOfValidDirectories[$index];
 
 // Cachear tamaño del directorio principal en Redis con clave robusta
 $directorySizeCacheKey = sprintf(
     'user:%d:directory:%s:size',
     $_SESSION['user']['id'],
-    hash('sha256', $directoryUser) // hash robusto del path
+    hash('sha256', $directoryUser)
 );
 
 $directorySizeBytes = null;
@@ -99,36 +110,40 @@ if ($cachedDirectorySize !== false) {
     $directorySizeBytes = (int) $cachedDirectorySize;
 } else {
     $directorySizeBytes = folderSize($directoryUser);
-    // Cache con TTL de 60 segundos (ajusta a gusto)
+    // Cache con TTL de 60 segundos
     $redis->setex($directorySizeCacheKey, 60, (string) $directorySizeBytes);
 }
 
-// * Obtenemos El Directorio Padre Filtrando Por El Directorio Actual Del User
-$statement = $connection->prepare("SELECT parent_directory FROM directory WHERE id_user = :id_user AND path = :path LIMIT 1");
+// Obtener directorio padre
+$statement = $connection->prepare(
+    "SELECT parent_directory 
+     FROM directory 
+     WHERE id_user = :id_user AND path = :path 
+     LIMIT 1"
+);
 $statement->execute([
     ":id_user" => $_SESSION["user"]["id"],
-    ":path" => addslashes($directoryUser)
+    ":path"    => addslashes($directoryUser)
 ]);
 
-$parentDirectoryActual = $statement->fetch(PDO::FETCH_ASSOC)["parent_directory"];
+$parentResult = $statement->fetch(PDO::FETCH_ASSOC);
+$parentDirectoryActual = $parentResult["parent_directory"] ?? null;
 
 if (is_dir($directoryUser)) {
-    foreach (new DirectoryIterator($directoryUser) as $index => $entry) {
+    foreach (new DirectoryIterator($directoryUser) as $idx => $entry) {
         if ($entry->isDot()) continue;
         if ($entry->isDir()) {
             $listSubDirectory[] = $entry->getFilename();
         }
     }
 } else {
-    die("[x] El Directory No Existe: $directoryUser" . PHP_EOL);
+    die("[x] El directorio no existe: $directoryUser" . PHP_EOL);
 }
 
 $appRootDirectory = realpath(dirname(__FILE__));
-
 $directoryAppIcon = $appRootDirectory . "/static/icon/";
 
 $listFiles = [];
-
 foreach (new DirectoryIterator($directoryUser) as $indice => $file) {
     if ($file->isDot()) continue;
     if ($file->isFile()) {
@@ -140,34 +155,26 @@ foreach (new DirectoryIterator($directoryUser) as $indice => $file) {
 
 <body>
     <?php require __DIR__ . "/partials/navbar.php" ?>
+
     <?php if ($error): ?>
-        <svg xmlns="http://www.w3.org/2000/svg"
-            class="d-none">
-            <symbol id="check-circle-fill"
-                viewBox="0 0 16 16">
+        <svg xmlns="http://www.w3.org/2000/svg" class="d-none">
+            <symbol id="check-circle-fill" viewBox="0 0 16 16">
                 <path
                     d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zm-3.97-3.03a.75.75 0 0 0-1.08.022L7.477 9.417 5.384 7.323a.75.75 0 0 0-1.06 1.06L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-.01-1.05z" />
             </symbol>
-            <symbol id="info-fill"
-                viewBox="0 0 16 16">
+            <symbol id="info-fill" viewBox="0 0 16 16">
                 <path
                     d="M8 16A8 8 0 1 0 8 0a8 8 0 0 0 0 16zm.93-9.412-1 4.705c-.07.34.029.533.304.533.194 0 .487-.07.686-.246l-.088.416c-.287.346-.92.598-1.465.598-.703 0-1.002-.422-.808-1.319l.738-3.468c.064-.293.006-.399-.287-.47l-.451-.081.082-.381 2.29-.287zM8 5.5a1 1 0 1 1 0-2 1 1 0 0 1 0 2z" />
             </symbol>
-            <symbol id="exclamation-triangle-fill"
-                viewBox="0 0 16 16">
+            <symbol id="exclamation-triangle-fill" viewBox="0 0 16 16">
                 <path
                     d="M8.982 1.566a1.13 1.13 0 0 0-1.96 0L.165 13.233c-.457.778.091 1.767.98 1.767h13.713c.889 0 1.438-.99.98-1.767L8.982 1.566zM8 5c.535 0 .954.462.9.995l-.35 3.507a.552.552 0 0 1-1.1 0L7.1 5.995A.905.905 0 0 1 8 5zm.002 6a1 1 0 1 1 0 2 1 1 0 0 1 0-2z" />
             </symbol>
         </svg>
 
         <div class="container mt-4">
-            <div class="alert alert-danger d-flex align-items-center"
-                role="alert">
-                <svg class="bi flex-shrink-0 me-2"
-                    width="26"
-                    height="26"
-                    role="img"
-                    aria-label="Danger:">
+            <div class="alert alert-danger d-flex align-items-center" role="alert">
+                <svg class="bi flex-shrink-0 me-2" width="26" height="26" role="img" aria-label="Danger:">
                     <use xlink:href="#exclamation-triangle-fill" />
                 </svg>
                 <div>
@@ -176,28 +183,24 @@ foreach (new DirectoryIterator($directoryUser) as $indice => $file) {
             </div>
         </div>
     <?php endif ?>
+
     <?php if (isset($_SESSION["flash"])): ?>
-        <svg xmlns="http://www.w3.org/2000/svg"
-            class="d-none">
-            <symbol id="check-circle-fill"
-                viewBox="0 0 16 16">
+        <svg xmlns="http://www.w3.org/2000/svg" class="d-none">
+            <symbol id="check-circle-fill" viewBox="0 0 16 16">
                 <path
                     d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zm-3.97-3.03a.75.75 0 0 0-1.08.022L7.477 9.417 5.384 7.323a.75.75 0 0 0-1.06 1.06L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-.01-1.05z" />
             </symbol>
-            <symbol id="info-fill"
-                viewBox="0 0 16 16">
+            <symbol id="info-fill" viewBox="0 0 16 16">
                 <path
                     d="M8 16A8 8 0 1 0 8 0a8 8 0 0 0 0 16zm.93-9.412-1 4.705c-.07.34.029.533.304.533.194 0 .487-.07.686-.246l-.088.416c-.287.346-.92.598-1.465.598-.703 0-1.002-.422-.808-1.319l.738-3.468c.064-.293.006-.399-.287-.47l-.451-.081.082-.381 2.29-.287zM8 5.5a1 1 0 1 1 0-2 1 1 0 0 1 0 2z" />
             </symbol>
-            <symbol id="exclamation-triangle-fill"
-                viewBox="0 0 16 16">
+            <symbol id="exclamation-triangle-fill" viewBox="0 0 16 16">
                 <path
                     d="M8.982 1.566a1.13 1.13 0 0 0-1.96 0L.165 13.233c-.457.778.091 1.767.98 1.767h13.713c.889 0 1.438-.99.98-1.767L8.982 1.566zM8 5c.535 0 .954.462.9.995l-.35 3.507a.552.552 0 0 1-1.1 0L7.1 5.995A.905.905 0 0 1 8 5zm.002 6a1 1 0 1 1 0 2 1 1 0 0 1 0-2z" />
             </symbol>
         </svg>
         <div class="container mt-4">
-            <div class="<?= $_SESSION['flash']['class'] ?>"
-                role="alert">
+            <div class="<?= $_SESSION['flash']['class'] ?>" role="alert">
                 <svg class="bi flex-shrink-0 me-2"
                     role="img"
                     width="26"
@@ -213,95 +216,73 @@ foreach (new DirectoryIterator($directoryUser) as $indice => $file) {
         </div>
     <?php endif ?>
 
-    <!-- 0 - 2 -> verde, 3 -> 5 azul , 6 -> 8 amarillo 9 -> 10 rojo -->
     <div class="container mb-3 mt-4 pt-2 d-grid gap-2">
         <h1 class="justify-content-center align-items-center">Espacio Disponible</h1>
 
         <?php
-        // Usamos el valor cacheado del tamaño
         $opcion = availableSpaceGb($directorySizeBytes);
-        // Calcula el porcentaje de espacio utilizado
         $usedPercentage = 100 - ($opcion * 10);
         ?>
-        <!-- Barra Red -->
-        <?php if ($opcion <= 0 && $opcion <= 2): ?>
-            <div class="progress"
-                role="progressbar"
-                aria-label="Danger example"
-                aria-valuenow="100"
-                aria-valuemin="0"
-                aria-valuemax="100">
-                <div class="progress-bar bg-danger"
-                    style="width: <?= $usedPercentage ?>%"></div>
+
+        <?php if ($opcion >= 0 && $opcion <= 2): ?>
+            <div class="progress" role="progressbar" aria-label="Success example"
+                aria-valuenow="<?= $usedPercentage ?>" aria-valuemin="0" aria-valuemax="100">
+                <div class="progress-bar bg-success" style="width: <?= $usedPercentage ?>%"></div>
             </div>
-            <!-- Barra Amarillo -->
         <?php elseif ($opcion >= 3 && $opcion <= 5): ?>
-            <div class="progress"
-                role="progressbar"
-                aria-label="Warning example"
-                aria-valuenow="75"
-                aria-valuemin="0"
-                aria-valuemax="100">
-                <div class="progress-bar bg-warning"
-                    style="width: <?= $usedPercentage ?>%"></div>
+            <div class="progress" role="progressbar" aria-label="Info example"
+                aria-valuenow="<?= $usedPercentage ?>" aria-valuemin="0" aria-valuemax="100">
+                <div class="progress-bar bg-info" style="width: <?= $usedPercentage ?>%"></div>
             </div>
-            <!-- Barra Amarillo -->
         <?php elseif ($opcion >= 6 && $opcion <= 8): ?>
-            <div class="progress"
-                role="progressbar"
-                aria-label="Info example"
-                aria-valuenow="50"
-                aria-valuemin="0"
-                aria-valuemax="100">
-                <div class="progress-bar bg-info"
-                    style="width: <?= $usedPercentage ?>%"></div>
+            <div class="progress" role="progressbar" aria-label="Warning example"
+                aria-valuenow="<?= $usedPercentage ?>" aria-valuemin="0" aria-valuemax="100">
+                <div class="progress-bar bg-warning" style="width: <?= $usedPercentage ?>%"></div>
             </div>
         <?php else: ?>
-            <div class="progress"
-                role="progressbar"
-                aria-label="Success example"
-                aria-valuenow="25"
-                aria-valuemin="0"
-                aria-valuemax="100">
-                <div class="progress-bar bg-success"
-                    style="width: <?= $usedPercentage ?>%"></div>
+            <div class="progress" role="progressbar" aria-label="Danger example"
+                aria-valuenow="<?= $usedPercentage ?>" aria-valuemin="0" aria-valuemax="100">
+                <div class="progress-bar bg-danger" style="width: <?= $usedPercentage ?>%"></div>
             </div>
         <?php endif; ?>
     </div>
-    <!-- 10 GB -> Bytes -> 10737418240   -->
+
+    <!-- 10 GB -> Bytes -> 10737418240 -->
     <?php if ($directorySizeBytes < 10737418240): ?>
         <div class="container mb-3 mt-4 pt-2 d-grid gap-2">
             <div class="alert alert-success alert-dismissible fade show" role="alert">
-                <strong>Hi <?= $_SESSION["user"]["email"] ?>!</strong>
+                <strong>Hi <?= htmlspecialchars($_SESSION["user"]["email"]) ?>!</strong>
                 <br>
                 <em>
-                    Tienes <?= availableSpaceMb($directorySizeBytes); ?> Mb De Espacio Disponible.
-                    Puedes Subir Ficheros Con Un Peso Maximo De 3221225000 Bytes O Crear Directorios
+                    Tienes <?= availableSpaceMb($directorySizeBytes); ?> Mb de espacio disponible.
+                    Puedes subir ficheros con un peso máximo de 3221225000 bytes o crear directorios.
                 </em>
                 <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
             </div>
         </div>
 
-        <form action="<?= $_SERVER["PHP_SELF"] ?>" method="post" enctype="multipart/form-data">
+        <form action="<?= htmlspecialchars($_SERVER["PHP_SELF"]) ?>" method="post" enctype="multipart/form-data">
             <div class="container mb-3 mt-4">
-                <label for="formInput" class="form-label">Seleccione Un Fichero</label>
+                <label for="formInput" class="form-label">Seleccione un fichero</label>
                 <input class="form-control" required autofocus type="file" id="formInput" name="uploadedFile">
-                <button type="submit" id="buttonUploadForm" class="btn btn-primary mt-2" style="width: auto;">Subir Fichero</button>
+                <button type="submit" id="buttonUploadForm" class="btn btn-primary mt-2" style="width: auto;">
+                    Subir fichero
+                </button>
             </div>
         </form>
     <?php else: ?>
         <div class="container mb-3 mt-4 pt-2 d-grid gap-2">
             <div class="alert alert-danger alert-dismissible fade show" role="alert">
-                <strong>Hi <?= $_SESSION["user"]["email"] ?>!</strong>
+                <strong>Hi <?= htmlspecialchars($_SESSION["user"]["email"]) ?>!</strong>
                 <br>
-                <em>Te Has Quedado Sin Espacio. Has Ocupado Tus 10 Gb De Espacio Disponible. Elimina Algunos Ficheros O Directorios Para Obtener Más Espacio.</em>
+                <em>Te has quedado sin espacio. Has ocupado tus 10 GB de espacio disponible. Elimina algunos ficheros o directorios para obtener más espacio.</em>
                 <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
             </div>
         </div>
     <?php endif; ?>
+
     <div class="container mb-3 mt-4 pt-2 d-grid gap-2">
         <hr>
-        <!-- 10 GB -> Bytes -> 10737418240   -->
         <?php if ($directorySizeBytes < 10737418240): ?>
             <form class="row g-3" method="post" action="<?= htmlspecialchars($_SERVER['PHP_SELF']) ?>">
                 <div class="col-auto">
@@ -319,7 +300,8 @@ foreach (new DirectoryIterator($directoryUser) as $indice => $file) {
                 </div>
             </form>
         <?php endif; ?>
-        <?php if ($parentDirectoryActual !== $appRootDirectory): ?>
+
+        <?php if ($parentDirectoryActual && $parentDirectoryActual !== $appRootDirectory): ?>
             <?php
             $params = http_build_query([
                 "directory" => $parentDirectoryActual,
@@ -328,7 +310,7 @@ foreach (new DirectoryIterator($directoryUser) as $indice => $file) {
             <a href="<?= $_SERVER['PHP_SELF'] . "?" . $params ?>"
                 class="btn btn-outline-info d-flex align-items-center justify-content-between w-100">
                 <label class="me-2">
-                    Parent Directory (Retroceder Un Directorio)
+                    Parent Directory (Retroceder un directorio)
                 </label>
                 <span class="me-2">Propietario:
                     <?= htmlspecialchars($_SESSION['user']['email']) ?>
@@ -336,6 +318,7 @@ foreach (new DirectoryIterator($directoryUser) as $indice => $file) {
                 <img style="width: 2.0rem;" src="./static/icon/directory.png" alt="Icon Directory">
             </a>
         <?php endif ?>
+
         <?php for ($i = 0; $i < count($listSubDirectory); $i++): ?>
             <div class="d-flex align-items-center justify-content-between mb-2">
                 <?php
@@ -343,7 +326,6 @@ foreach (new DirectoryIterator($directoryUser) as $indice => $file) {
                     "directory" => addslashes($directoryUser . DIRECTORY_SEPARATOR . $listSubDirectory[$i]),
                 ]);
 
-                // Cachear tamaño de cada subdirectorio
                 $subDirPath = $directoryUser . DIRECTORY_SEPARATOR . $listSubDirectory[$i];
 
                 $subDirSizeCacheKey = sprintf(
@@ -362,9 +344,7 @@ foreach (new DirectoryIterator($directoryUser) as $indice => $file) {
                     $redis->setex($subDirSizeCacheKey, 60, (string) $subDirSizeBytes);
                 }
                 ?>
-                <!-- Botón grande -->
-                <a
-                    href="<?= $_SERVER['PHP_SELF'] . "?" . $params ?>"
+                <a href="<?= $_SERVER['PHP_SELF'] . "?" . $params ?>"
                     class="btn btn-outline-info d-flex align-items-center justify-content-between w-100">
                     <label class="me-2">
                         <?= htmlspecialchars($listSubDirectory[$i]) ?>
@@ -378,22 +358,24 @@ foreach (new DirectoryIterator($directoryUser) as $indice => $file) {
                     <img style="width: 2.0rem;" src="./static/icon/directory.png" alt="Icon Directory">
                 </a>
 
-                <form
-                    method="post"
-                    action="./delete_directory.php?id=<?= $_SESSION['user']['id'] ?>">
-                    <button class="ms-2 btn btn-outline-danger" name="directoryRemove" autofocus value="<?= $directoryUser . '/' . $listSubDirectory[$i] ?>">
+                <form method="post" action="./delete_directory.php?id=<?= $_SESSION['user']['id'] ?>">
+                    <button class="ms-2 btn btn-outline-danger"
+                        name="directoryRemove"
+                        autofocus
+                        value="<?= $directoryUser . '/' . $listSubDirectory[$i] ?>">
                         <img style="width: 2.0rem; cursor: pointer;"
                             src="./static/icon/removeDirectory.png"
                             alt="Remove Directory">
                     </button>
                 </form>
+
                 <?php
                 $params = http_build_query([
                     "shareDirectory" => urlencode($directoryUser . '/' . $listSubDirectory[$i]),
                     "id" => $_SESSION['user']['id']
                 ]);
                 ?>
-                <a href="./shared_directory_forms.php?<?= $params ?>" class="ms-2 btn btn-outline-primary" name="directoryRemove" autofocus>
+                <a href="./shared_directory_forms.php?<?= $params ?>" class="ms-2 btn btn-outline-primary">
                     <img style="width: 2.0rem; cursor: pointer;"
                         src="./static/icon/compartir.png"
                         alt="icon">
@@ -406,7 +388,6 @@ foreach (new DirectoryIterator($directoryUser) as $indice => $file) {
 
     <?php foreach ($listFiles as $indice => $file): ?>
         <?php
-        // Cachear metadatos del fichero
         $fileMetaCacheKey = sprintf(
             'user:%d:file:%s:meta',
             $_SESSION['user']['id'],
@@ -426,7 +407,7 @@ foreach (new DirectoryIterator($directoryUser) as $indice => $file) {
                  LIMIT 1"
             );
             $statement->execute([
-                ":id" => $_SESSION['user']['id'],
+                ":id"   => $_SESSION['user']['id'],
                 ":name" => $file,
             ]);
             $data = $statement->fetch(PDO::FETCH_ASSOC) ?: [];
@@ -438,8 +419,7 @@ foreach (new DirectoryIterator($directoryUser) as $indice => $file) {
         ?>
         <div class="container pt-4 p-3">
             <div class="row">
-                <div class="accordion"
-                    id="accordionExample">
+                <div class="accordion" id="accordionExample">
                     <div class="accordion-item">
                         <h2 class="accordion-header">
                             <button class="accordion-button d-flex align-items-center"
@@ -449,10 +429,10 @@ foreach (new DirectoryIterator($directoryUser) as $indice => $file) {
                                 aria-expanded="true"
                                 aria-controls="collapse<?= $indice ?>">
                                 <span class="me-auto">
-                                    <?= $file ?>
+                                    <?= htmlspecialchars($file) ?>
                                 </span>
                                 <label class="me-2">Propietario:
-                                    <?= $_SESSION["user"]["email"] ?>
+                                    <?= htmlspecialchars($_SESSION["user"]["email"]) ?>
                                 </label>
                                 <?php $icon = getFileExtension($directoryUser, $file); ?>
                                 <img style="width: 2.0rem;"
@@ -471,15 +451,15 @@ foreach (new DirectoryIterator($directoryUser) as $indice => $file) {
                                 <ul class="list-group list-group-flush">
                                     <li class="list-group-item m-1">Type:
                                         <?php if (isset($data["type"])): ?>
-                                            <?= $data["type"] ?>
+                                            <?= htmlspecialchars($data["type"]) ?>
                                         <?php endif; ?>
                                     </li>
                                     <li class="list-group-item m-1">Size:
                                         <?php if (isset($data["size"])): ?>
-                                            <?= $data["size"] ?> bytes
+                                            <?= htmlspecialchars($data["size"]) ?> bytes
                                         <?php endif; ?>
                                     </li>
-                                    <li class="list-group-item m-1">Fecha Creacion Del Fichero:
+                                    <li class="list-group-item m-1">Fecha creación del fichero:
                                         <?php if (isset($data["file_creation_date"])): ?>
                                             <?= date("Y-m-d H:i:s", strtotime($data["file_creation_date"])) ?>
                                         <?php endif; ?>
@@ -496,7 +476,7 @@ foreach (new DirectoryIterator($directoryUser) as $indice => $file) {
                                         require_once "./utils/list.php";
                                         if (in_array($data["type"], $listContentType)): ?>
                                             <a href="serve_file.php?file=<?= urlencode($data['path']) ?>&id=<?= $_SESSION['user']['id'] ?>"
-                                                class="card-link">Ver Contenido</a>
+                                                class="card-link">Ver contenido</a>
                                         <?php endif; ?>
                                     <?php endif; ?>
 
@@ -509,7 +489,7 @@ foreach (new DirectoryIterator($directoryUser) as $indice => $file) {
                                     if (isset($data["path"])) {
                                         $params = http_build_query([
                                             "sharedFile" => urlencode($data["path"]),
-                                            "id" => $_SESSION['user']['id']
+                                            "id"         => $_SESSION['user']['id']
                                         ]);
                                     }
                                     ?>
