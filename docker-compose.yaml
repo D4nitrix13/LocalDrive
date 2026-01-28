@@ -141,7 +141,7 @@ services:
       ME_CONFIG_BASICAUTH_USERNAME: admin
       ME_CONFIG_BASICAUTH_PASSWORD: admin123
     ports:
-      - "8081:8081/tcp"
+      - "8083:8081/tcp"
     expose:
       - "8081/tcp"
     networks:
