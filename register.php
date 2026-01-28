@@ -1,6 +1,8 @@
 <?php
 $error = null;
 
+require_once __DIR__ . '/sql/mongo_logger.php';
+
 /**
  * Asegura que el usuario tenga su directorio creado en disco
  * y registrado en la tabla `directory`.
@@ -23,7 +25,6 @@ function ensure_user_directory(PDO $connection, int $userId, string $appRootDire
 
     // 2) Verificar si ya hay registro en la tabla directory
     $statement = $connection->prepare(
-        // OJO: aquí antes decía SELECT id FROM directory ...
         "SELECT 1 FROM directory WHERE id_user = :id_user AND path = :path LIMIT 1"
     );
     $pathEscaped = addslashes($pathDirectory);
@@ -52,18 +53,24 @@ function ensure_user_directory(PDO $connection, int $userId, string $appRootDire
 }
 
 if ($_SERVER["REQUEST_METHOD"] === "POST" && !isset($_POST["theme"])) {
-    $name = $_POST["name"];
-    $email = $_POST["email"];
-    $password = $_POST["password"];
+    $name     = $_POST["name"]     ?? '';
+    $email    = $_POST["email"]    ?? '';
+    $password = $_POST["password"] ?? '';
 
-    if (empty($name) || empty($email) || empty($password) || !str_contains($email, "@") || strlen($password) <= 7) {
+    if (
+        empty($name) ||
+        empty($email) ||
+        empty($password) ||
+        !str_contains($email, "@") ||
+        strlen($password) <= 7
+    ) {
         // 400 Bad Request lógicamente, pero solo mostramos el mensaje al user
         $error = "Complete All Fields";
     } else {
         $connection = require './sql/db.php';
 
         $statement = $connection->prepare("SELECT email FROM users WHERE email = :email LIMIT 1");
-        $statement->bindParam(":email", $_POST["email"]);
+        $statement->bindParam(":email", $email);
         $statement->execute();
 
         // No tiene que haber coincidencias, ya que estamos registrando un nuevo usuario.
@@ -74,32 +81,44 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && !isset($_POST["theme"])) {
             $connection
                 ->prepare("INSERT INTO users (name, email, password) VALUES (:name, :email, :password)")
                 ->execute([
-                    ":name"     => $_POST["name"],
-                    ":email"    => $_POST["email"],
-                    ":password" => password_hash($_POST["password"], PASSWORD_BCRYPT)
+                    ":name"     => $name,
+                    ":email"    => $email,
+                    ":password" => password_hash($password, PASSWORD_BCRYPT)
                 ]);
 
             // Recuperar usuario recién creado
             $statement = $connection->prepare("SELECT * FROM users WHERE email = :email LIMIT 1");
-            $statement->bindParam(":email", $_POST["email"]);
+            $statement->bindParam(":email", $email);
             $statement->execute();
             $user = $statement->fetch(PDO::FETCH_ASSOC);
 
-            // Directorio raíz de la app (normalmente /var/www/html)
-            $directoryRoot = realpath(dirname(__FILE__));
+            if (!$user) {
+                // Algo muy raro: insertó pero no lo encuentra
+                $error = "Internal error: user not found after insert.";
+            } else {
+                // Directorio raíz de la app (normalmente /var/www/html)
+                $directoryRoot = realpath(dirname(__FILE__));
 
-            // Asegurar directorio y registro en tabla `directory`
-            // Aquí ya no importa si el volumen tenía Directory1 de antes:
-            //    - si no existe → lo crea
-            //    - si existe pero no está en BD → inserta fila
-            //    - si existe y está en BD → no hace nada
-            ensure_user_directory($connection, (int)$user["id"], $directoryRoot);
+                // Asegurar directorio y registro en tabla `directory`
+                $userDirectory = ensure_user_directory($connection, (int)$user["id"], $directoryRoot);
 
-            session_start();
-            unset($user["password"]);
-            $_SESSION["user"] = $user;
-            header("Location: ./home.php");
-            exit();
+                // Sesión del usuario
+                session_start();
+                unset($user["password"]);
+                $_SESSION["user"] = $user;
+
+                // Log en MongoDB: registro de usuario
+                log_event('user_registered', [
+                    'user_id'     => (int) $user['id'],
+                    'name'        => $user['name'],
+                    'email'       => $user['email'],
+                    'directory'   => $userDirectory,
+                    'description' => 'Nuevo usuario registrado y directorio inicial creado',
+                ]);
+
+                header("Location: ./home.php");
+                exit();
+            }
         }
     }
 }

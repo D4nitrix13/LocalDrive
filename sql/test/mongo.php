@@ -4,15 +4,15 @@
 // No requiere Composer ni vendor/autoload.php
 
 try {
-    // URI del docker-compose
-    $uri = getenv('MONGO_URI') ?: 'mongodb://mongo_user:mongo_password@mongo:27017/localdrive_logs?authSource=admin';
+    // URI del docker-compose + authMechanism para evitar SCRAM-SHA-256
+    $uri = getenv('MONGO_URI') ?: 'mongodb://mongo_user:mongo_password@mongo:27017/localdrive_logs?authSource=admin&authMechanism=SCRAM-SHA-1';
 
     // Crear Manager nativo
     $manager = new MongoDB\Driver\Manager($uri);
 
     // Documento a insertar
     $doc = [
-        'message'     => 'MongoDB Test OK (sin Composer)',
+        'message'     => 'MongoDB Test OK (sin Composer, SCRAM-SHA-1)',
         'php_version' => phpversion(),
         'time'        => new MongoDB\BSON\UTCDateTime(),
         'random'      => bin2hex(random_bytes(4)),

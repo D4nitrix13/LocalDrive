@@ -58,7 +58,7 @@ services:
       REDIS_PASSWORD: s3cureRedisP@ss
 
       # Mongo (para logs)
-      MONGO_URI: mongodb://mongo_user:mongo_password@mongo:27017/localdrive_logs?authSource=admin
+      MONGO_URI: mongodb://mongo_user:mongo_password@mongo:27017/localdrive_logs?authSource=admin&authMechanism=SCRAM-SHA-1
     secrets:
       - POSTGRES_PASSWORD
     profiles:
@@ -101,6 +101,8 @@ services:
       REDIS_HOSTS: "local:redis:6379:0:s3cureRedisP@ss"
     ports:
       - "8082:8081/tcp" # host:container (UI redis-commander)
+    expose:
+      - "8081/tcp"
     networks:
       - network
     profiles:
@@ -116,6 +118,8 @@ services:
       MONGO_INITDB_DATABASE: localdrive_logs
     ports:
       - "27017:27017/tcp"
+    expose:
+      - "27017/tcp"
     volumes:
       - mongo_data:/data/db
     networks:
@@ -138,6 +142,8 @@ services:
       ME_CONFIG_BASICAUTH_PASSWORD: admin123
     ports:
       - "8081:8081/tcp"
+    expose:
+      - "8081/tcp"
     networks:
       - network
     profiles:
@@ -150,10 +156,12 @@ services:
     depends_on:
       - db
     environment:
-      PGADMIN_DEFAULT_EMAIL: admin@localdrive.test
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
       PGADMIN_DEFAULT_PASSWORD: admin123
     ports:
       - "5050:80/tcp"
+    expose:
+      - "80/tcp"
     networks:
       - network
     profiles:

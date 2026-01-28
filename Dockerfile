@@ -3,11 +3,6 @@
 # GitLab: https://gitlab.com/DanielBenjaminPerezMoralesDev13
 # Correo electrónico: danielperezdev@proton.me
 
-# Autor: Daniel Benjamin Perez Morales
-# GitHub: https://github.com/DanielBenjaminPerezMoralesDev13
-# GitLab: https://gitlab.com/DanielBenjaminPerezMoralesDev13
-# Correo electrónico: danielperezdev@proton.me
-
 ARG TAG=8.4-apache-bullseye
 
 # Stage 1: obtener dockerize
@@ -16,34 +11,52 @@ FROM jwilder/dockerize AS dockerize
 # Stage 2: imagen final PHP + Apache
 FROM php:${TAG}
 
-# Instalación de dependencias, extensiones y dockerize
+# Instalación de dependencias del sistema, extensiones PHP y dockerize
 RUN apt-get update && \
     apt-get install -y \
         libpq-dev \
         tini \
+        libssl-dev \
+        pkg-config \
         $PHPIZE_DEPS && \
+    \
+    # Extensión nativa de PostgreSQL
     docker-php-ext-install pdo_pgsql && \
+    \
+    # Extensiones PECL: Redis + MongoDB (Mongo con soporte SSL gracias a libssl-dev)
     pecl install redis mongodb && \
     docker-php-ext-enable redis mongodb && \
+    \
+    # Preparar logs de la app
     mkdir -p /var/www/html/logs && \
     touch /var/www/html/logs/access.log /var/www/html/logs/error.log && \
+    \
+    # Usuario no root para la app
     useradd -m d4nitrix13 && \
+    \
+    # Limpiar dependencias de build para reducir la imagen
+    apt-get purge -y --auto-remove $PHPIZE_DEPS pkg-config && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /var/www/html
 
-# Copiar el código de la app con el propietario correcto
+# Copiar el código de la app con propietario correcto
 COPY --chown=d4nitrix13:d4nitrix13 ./ ./
 
 # Sustituir la configuración de Apache
-RUN ["mv", "./config/apache2.conf", "/etc/apache2/apache2.conf"]
+RUN mv ./config/apache2.conf /etc/apache2/apache2.conf
 
-# Copiar dockerize desde el stage anterior (binario confirmado en /bin)
+# Copiar dockerize desde el stage anterior
 COPY --from=dockerize /bin/dockerize /usr/local/bin/dockerize
 
-# HEALTHCHECK usando el nombre del servicio en lugar de la IP
+# HEALTHCHECK: verifica que Apache responda y vuelca logs a los ficheros de la app
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD [ "dockerize", "-wait", "http://app:80", "-stdout", "/var/www/html/logs/access.log", "-stderr", "/var/www/html/logs/error.log", "-wait-retry-interval", "1s", "-timeout", "10s" ]
+    CMD ["dockerize", \
+         "-wait", "http://app:80", \
+         "-stdout", "/var/www/html/logs/access.log", \
+         "-stderr", "/var/www/html/logs/error.log", \
+         "-wait-retry-interval", "1s", \
+         "-timeout", "10s"]
 
 ENTRYPOINT ["tini", "--"]
 
@@ -66,6 +79,7 @@ ENV APACHE_RUN_DIR=/var/run/apache2 \
     APACHE_RUN_GROUP=www-data
 
 CMD ["apache2", "-D", "FOREGROUND"]
+
 
 # Foros
 # https://serverfault.com/questions/558283/apache2-config-variable-is-not-defined
