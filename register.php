@@ -1,16 +1,63 @@
 <?php
 $error = null;
+
+/**
+ * Asegura que el usuario tenga su directorio creado en disco
+ * y registrado en la tabla `directory`.
+ *
+ * - Si no existe el directorio en disco, lo crea.
+ * - Si no existe el registro en BD, lo inserta.
+ * - Si ya existe todo, no hace nada.
+ */
+function ensure_user_directory(PDO $connection, int $userId, string $appRootDirectory): string
+{
+    $nameDirectory = "Directory{$userId}";
+    $pathDirectory = $appRootDirectory . DIRECTORY_SEPARATOR . $nameDirectory;
+
+    // 1) Si el directorio NO existe en disco → crearlo
+    if (!is_dir($pathDirectory)) {
+        if (!mkdir($pathDirectory, 0777, true) && !is_dir($pathDirectory)) {
+            throw new RuntimeException("[x] No se pudo crear el directorio $pathDirectory");
+        }
+    }
+
+    // 2) Verificar si ya hay registro en la tabla directory
+    $statement = $connection->prepare(
+        // OJO: aquí antes decía SELECT id FROM directory ...
+        "SELECT 1 FROM directory WHERE id_user = :id_user AND path = :path LIMIT 1"
+    );
+    $pathEscaped = addslashes($pathDirectory);
+    $statement->execute([
+        ":id_user" => $userId,
+        ":path"    => $pathEscaped,
+    ]);
+
+    $row = $statement->fetch(PDO::FETCH_ASSOC);
+
+    // 3) Si no hay registro en BD → insertarlo
+    if (!$row) {
+        $insert = $connection->prepare(
+            "INSERT INTO directory (id_user, name, path, parent_directory)
+             VALUES (:id_user, :name, :path, :parent_directory)"
+        );
+        $insert->execute([
+            ":id_user"          => $userId,
+            ":name"             => $nameDirectory,
+            ":path"             => $pathEscaped,
+            ":parent_directory" => $appRootDirectory,
+        ]);
+    }
+
+    return $pathDirectory;
+}
+
 if ($_SERVER["REQUEST_METHOD"] === "POST" && !isset($_POST["theme"])) {
     $name = $_POST["name"];
     $email = $_POST["email"];
     $password = $_POST["password"];
-    if (empty($name) || empty($email) || empty($password) || !str_contains($email, "@") || strlen($password) <= 7) {
-        // Cuando un usuario no completa todos los campos requeridos en un formulario y se envía el formulario, el código de estado HTTP adecuado que se suele devolver es 400 Bad Request.
-        // El código de estado 400 indica que la solicitud del cliente es incorrecta o malformada. En el contexto de un formulario, esto puede significar que algunos campos requeridos no se han completado o que los datos enviados son inválidos.
 
-        // http_response_code(401);
-        // echo("[x] 400 Bad Request (Complete All Fields)" . PHP_EOL);
-        // return;
+    if (empty($name) || empty($email) || empty($password) || !str_contains($email, "@") || strlen($password) <= 7) {
+        // 400 Bad Request lógicamente, pero solo mostramos el mensaje al user
         $error = "Complete All Fields";
     } else {
         $connection = require './sql/db.php';
@@ -23,41 +70,36 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && !isset($_POST["theme"])) {
         if ($statement->rowCount() > 0) {
             $error = "This Email Is Taken";
         } else {
-            $connection->prepare("INSERT INTO users (name, email, password) VALUES (:name, :email, :password)")->execute([
-                ":name" => $_POST["name"],
-                ":email" => $_POST["email"],
-                ":password" => password_hash($_POST["password"], PASSWORD_BCRYPT)
-            ]);
+            // Crear usuario
+            $connection
+                ->prepare("INSERT INTO users (name, email, password) VALUES (:name, :email, :password)")
+                ->execute([
+                    ":name"     => $_POST["name"],
+                    ":email"    => $_POST["email"],
+                    ":password" => password_hash($_POST["password"], PASSWORD_BCRYPT)
+                ]);
 
+            // Recuperar usuario recién creado
             $statement = $connection->prepare("SELECT * FROM users WHERE email = :email LIMIT 1");
             $statement->bindParam(":email", $_POST["email"]);
             $statement->execute();
-
             $user = $statement->fetch(PDO::FETCH_ASSOC);
-            $directory = realpath(dirname(__FILE__));
-            $nameDirectory = "Directory{$user['id']}";
-            $pathDirectory = "$directory/$nameDirectory";
 
-            $statement = $connection->prepare("INSERT INTO directory (id_user, name, path, parent_directory) VALUES (:id_user, :name, :path, :parent_directory)");
-            $statement->bindParam(":id_user", $user["id"]);
-            $statement->bindParam(":name", $nameDirectory);
-            $pathDirectory =  addslashes($pathDirectory);
-            $statement->bindParam(":path", $pathDirectory);
-            $statement->bindParam(":parent_directory", $directory);
-            $statement->execute();
+            // Directorio raíz de la app (normalmente /var/www/html)
+            $directoryRoot = realpath(dirname(__FILE__));
 
-            // Creacion Del Directorio
-            if (!is_dir("$directory/Directory{$user['id']}")) {
-                mkdir("$directory/Directory{$user['id']}", 0777, true);
-            } else {
-                echo ("[x] Directory Exists Not Create $directory/Directory{$user['id']}");
-                die();
-            }
-            
+            // Asegurar directorio y registro en tabla `directory`
+            // Aquí ya no importa si el volumen tenía Directory1 de antes:
+            //    - si no existe → lo crea
+            //    - si existe pero no está en BD → inserta fila
+            //    - si existe y está en BD → no hace nada
+            ensure_user_directory($connection, (int)$user["id"], $directoryRoot);
+
             session_start();
             unset($user["password"]);
             $_SESSION["user"] = $user;
             header("Location: ./home.php");
+            exit();
         }
     }
 }
@@ -69,13 +111,16 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && !isset($_POST["theme"])) {
     <?php if ($error): ?>
         <svg xmlns="http://www.w3.org/2000/svg" class="d-none">
             <symbol id="check-circle-fill" viewBox="0 0 16 16">
-                <path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zm-3.97-3.03a.75.75 0 0 0-1.08.022L7.477 9.417 5.384 7.323a.75.75 0 0 0-1.06 1.06L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-.01-1.05z" />
+                <path
+                    d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zm-3.97-3.03a.75.75 0 0 0-1.08.022L7.477 9.417 5.384 7.323a.75.75 0 0 0-1.06 1.06L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-.01-1.05z" />
             </symbol>
             <symbol id="info-fill" viewBox="0 0 16 16">
-                <path d="M8 16A8 8 0 1 0 8 0a8 8 0 0 0 0 16zm.93-9.412-1 4.705c-.07.34.029.533.304.533.194 0 .487-.07.686-.246l-.088.416c-.287.346-.92.598-1.465.598-.703 0-1.002-.422-.808-1.319l.738-3.468c.064-.293.006-.399-.287-.47l-.451-.081.082-.381 2.29-.287zM8 5.5a1 1 0 1 1 0-2 1 1 0 0 1 0 2z" />
+                <path
+                    d="M8 16A8 8 0 1 0 8 0a8 8 0 0 0 0 16zm.93-9.412-1 4.705c-.07.34.029.533.304.533.194 0 .487-.07.686-.246l-.088.416c-.287.346-.92.598-1.465.598-.703 0-1.002-.422-.808-1.319l.738-3.468c.064-.293.006-.399-.287-.47l-.451-.081.082-.381 2.29-.287zM8 5.5a1 1 0 1 1 0-2 1 1 0 0 1 0 2z" />
             </symbol>
             <symbol id="exclamation-triangle-fill" viewBox="0 0 16 16">
-                <path d="M8.982 1.566a1.13 1.13 0 0 0-1.96 0L.165 13.233c-.457.778.091 1.767.98 1.767h13.713c.889 0 1.438-.99.98-1.767L8.982 1.566zM8 5c.535 0 .954.462.9.995l-.35 3.507a.552.552 0 0 1-1.1 0L7.1 5.995A.905.905 0 0 1 8 5zm.002 6a1 1 0 1 1 0 2 1 1 0 0 1 0-2z" />
+                <path
+                    d="M8.982 1.566a1.13 1.13 0 0 0-1.96 0L.165 13.233c-.457.778.091 1.767.98 1.767h13.713c.889 0 1.438-.99.98-1.767L8.982 1.566zM8 5c.535 0 .954.462.9.995l-.35 3.507a.552.552 0 0 1-1.1 0L7.1 5.995A.905.905 0 0 1 8 5zm.002 6a1 1 0 1 1 0 2 1 1 0 0 1 0-2z" />
             </symbol>
         </svg>
 
@@ -121,8 +166,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && !isset($_POST["theme"])) {
                                     name="email"
                                     required
                                     placeholder="Daniel@gmail.com"
-                                    autocomplete="name"
-                                    autofocus>
+                                    autocomplete="email">
                             </div>
                         </div>
                         <div class="row mb-3">
@@ -137,8 +181,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && !isset($_POST["theme"])) {
                                     placeholder="********"
                                     minlength="8"
                                     maxlength="64"
-                                    autocomplete="name"
-                                    autofocus>
+                                    autocomplete="new-password">
                             </div>
                         </div>
                         <fieldset class="row mb-3">

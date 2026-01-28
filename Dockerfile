@@ -3,6 +3,11 @@
 # GitLab: https://gitlab.com/DanielBenjaminPerezMoralesDev13
 # Correo electrónico: danielperezdev@proton.me
 
+# Autor: Daniel Benjamin Perez Morales
+# GitHub: https://github.com/DanielBenjaminPerezMoralesDev13
+# GitLab: https://gitlab.com/DanielBenjaminPerezMoralesDev13
+# Correo electrónico: danielperezdev@proton.me
+
 ARG TAG=8.4-apache-bullseye
 
 # Stage 1: obtener dockerize
@@ -11,13 +16,19 @@ FROM jwilder/dockerize AS dockerize
 # Stage 2: imagen final PHP + Apache
 FROM php:${TAG}
 
-# Instalación de dependencias y preparación
+# Instalación de dependencias, extensiones y dockerize
 RUN apt-get update && \
-    apt-get install -y libpq-dev tini && \
+    apt-get install -y \
+        libpq-dev \
+        tini \
+        $PHPIZE_DEPS && \
     docker-php-ext-install pdo_pgsql && \
+    pecl install redis && \
+    docker-php-ext-enable redis && \
     mkdir -p /var/www/html/logs && \
     touch /var/www/html/logs/access.log /var/www/html/logs/error.log && \
-    useradd -m d4nitrix13
+    useradd -m d4nitrix13 && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /var/www/html
 
@@ -27,7 +38,7 @@ COPY --chown=d4nitrix13:d4nitrix13 ./ ./
 # Sustituir la configuración de Apache
 RUN ["mv", "./config/apache2.conf", "/etc/apache2/apache2.conf"]
 
-# Copiar dockerize desde el stage anterior
+# Copiar dockerize desde el stage anterior (binario confirmado en /bin)
 COPY --from=dockerize /bin/dockerize /usr/local/bin/dockerize
 
 # HEALTHCHECK usando el nombre del servicio en lugar de la IP
@@ -44,8 +55,8 @@ STOPSIGNAL SIGTERM
 USER d4nitrix13
 
 LABEL maintainer="Daniel Benjamin Perez Morales" \
-    email="danielperezdev@proton.me" \
-    nickname="D4nitrix13"
+      email="danielperezdev@proton.me" \
+      nickname="D4nitrix13"
 
 ENV APACHE_RUN_DIR=/var/run/apache2 \
     APACHE_LOCK_DIR=/var/lock/apache2 \

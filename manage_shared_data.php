@@ -6,50 +6,114 @@ if (!isset($_SESSION["user"])) {
 }
 
 $connection = require "./sql/db.php";
+require_once "./sql/redis.php";
 
-// Get Data Shared Directory
-$statement = $connection->prepare(
-    "SELECT s.id_user_guest, d.name, d.path, u.email
-    FROM shared_directory s
-    INNER JOIN directory d ON s.path = d.path
-    INNER JOIN users u ON u.id = s.id_user_guest
-    WHERE s.id_user_property = :id"
-);
+$redis  = redis_client();
+$userId = (int) $_SESSION["user"]["id"];
 
-$statement->bindParam( ":id", $_SESSION["user"]["id"], PDO::PARAM_INT );
-$statement->execute();
+// ============================
+// Claves de cache por usuario
+// ============================
+$cacheKeySharedDirs  = sprintf('user:%d:shared:directories', $userId);
+$cacheKeySharedFiles = sprintf('user:%d:shared:files', $userId);
 
-$diccionarioSharedDirectory = $statement->fetchAll(PDO::FETCH_ASSOC);
+// =====================================
+// 1) Obtener directorios compartidos
+// =====================================
+$diccionarioSharedDirectory = [];
 
-$statement = $connection->prepare(
-    "SELECT s.id_user_guest, d.name, d.path, u.email
-    FROM shared_file s
-    INNER JOIN files d ON s.path = d.path
-    INNER JOIN users u ON u.id = s.id_user_guest
-    WHERE s.id_user_property = :id AND s.shared_from_a_directory = false"
-);
-$statement->bindParam(":id", $_SESSION["user"]["id"]);
-$statement->execute();
+$cachedDirs = $redis->get($cacheKeySharedDirs);
+if ($cachedDirs !== false) {
+    $decoded = json_decode($cachedDirs, true);
+    $diccionarioSharedDirectory = is_array($decoded) ? $decoded : [];
+} else {
+    $statement = $connection->prepare(
+        "SELECT s.id_user_guest,
+                d.name,
+                d.path,
+                u.email
+         FROM shared_directory s
+         INNER JOIN directory d ON s.path = d.path
+         INNER JOIN users u ON u.id = s.id_user_guest
+         WHERE s.id_user_property = :id"
+    );
+    $statement->bindParam(":id", $userId, PDO::PARAM_INT);
+    $statement->execute();
 
-$diccionarioSharedFiles = $statement->fetchAll(PDO::FETCH_ASSOC);
+    $diccionarioSharedDirectory = $statement->fetchAll(PDO::FETCH_ASSOC);
 
+    // Cache TTL 60s
+    $redis->setex($cacheKeySharedDirs, 60, json_encode($diccionarioSharedDirectory));
+}
+
+// =====================================
+// 2) Obtener ficheros compartidos
+// =====================================
+$diccionarioSharedFiles = [];
+
+$cachedFiles = $redis->get($cacheKeySharedFiles);
+if ($cachedFiles !== false) {
+    $decoded = json_decode($cachedFiles, true);
+    $diccionarioSharedFiles = is_array($decoded) ? $decoded : [];
+} else {
+    $statement = $connection->prepare(
+        "SELECT s.id_user_guest,
+                d.name,
+                d.path,
+                u.email
+         FROM shared_file s
+         INNER JOIN files d ON s.path = d.path
+         INNER JOIN users u ON u.id = s.id_user_guest
+         WHERE s.id_user_property = :id
+           AND s.shared_from_a_directory = false"
+    );
+    $statement->bindParam(":id", $userId, PDO::PARAM_INT);
+    $statement->execute();
+
+    $diccionarioSharedFiles = $statement->fetchAll(PDO::FETCH_ASSOC);
+
+    // Cache TTL 60s
+    $redis->setex($cacheKeySharedFiles, 60, json_encode($diccionarioSharedFiles));
+}
+
+// =====================================
+// 3) Lógica para dejar de compartir FILE
+// =====================================
 if (
-    $_SERVER["REQUEST_METHOD"] === "GET" and
-    isset( $_GET["filePath"] ) and isset( $_GET["idGuest"] )
+    $_SERVER["REQUEST_METHOD"] === "GET" &&
+    isset($_GET["filePath"]) &&
+    isset($_GET["idGuest"])
 ) {
     $existSharedFile = false;
-    $filePath = urldecode($_GET["filePath"]);
+    $filePath        = urldecode($_GET["filePath"]);
+    $idGuest         = (int) $_GET["idGuest"];
 
     foreach ($diccionarioSharedFiles as $key => $value) {
-        if ($filePath !== $value["path"]) continue;
+        if ($filePath !== $value["path"] || $idGuest !== (int)$value["id_user_guest"]) {
+            continue;
+        }
+
         $existSharedFile = true;
 
-        $statement = $connection->prepare("DELETE FROM shared_file WHERE id_user_property = :id AND path = :path AND id_user_guest = :id_user_guest");
+        $statement = $connection->prepare(
+            "DELETE FROM shared_file
+             WHERE id_user_property = :id
+               AND path = :path
+               AND id_user_guest = :id_user_guest"
+        );
         $statement->execute([
-            ":path" => $value["path"],
-            ":id" => $_SESSION["user"]["id"],
-            ":id_user_guest" => $_GET["idGuest"]
+            ":path"          => $value["path"],
+            ":id"            => $userId,
+            ":id_user_guest" => $idGuest,
         ]);
+
+        // Actualizar cache en memoria y en Redis
+        unset($diccionarioSharedFiles[$key]);
+        $redis->setex(
+            $cacheKeySharedFiles,
+            60,
+            json_encode(array_values($diccionarioSharedFiles))
+        );
 
         break;
     }
@@ -57,43 +121,63 @@ if (
     $filePathMessages = basename($filePath);
     if (!$existSharedFile) {
         $_SESSION["flash"] = [
-            "message" => "Error The File $filePathMessages That You Want To Stop Sharing Does Not Belong To You Or Does Not Exist",
-            "class" => "alert alert-danger d-flex align-items-center",
+            "message"    => "Error The File $filePathMessages That You Want To Stop Sharing Does Not Belong To You Or Does Not Exist",
+            "class"      => "alert alert-danger d-flex align-items-center",
             "aria-label" => "Danger:",
             "xlink:href" => "#exclamation-triangle-fill"
-            // Colour Red
         ];
         header("Location: ./manage_shared_data.php");
         exit();
     }
 
     $_SESSION["flash"] = [
-        "message" => "You Have Stopped Sharing The File $filePathMessages",
-        "class" => "alert alert-success d-flex align-items-center",
+        "message"    => "You Have Stopped Sharing The File $filePathMessages",
+        "class"      => "alert alert-success d-flex align-items-center",
         "aria-label" => "Success:",
         "xlink:href" => "#check-circle-fill"
-        // Colour Green
     ];
 
     header("Location: ./manage_shared_data.php");
     exit();
-} else if (
-    $_SERVER["REQUEST_METHOD"] === "GET" and
-    isset( $_GET["dirPath"] ) and isset( $_GET["idGuest"] )
+}
+// =====================================
+// 4) Lógica para dejar de compartir DIR
+// =====================================
+else if (
+    $_SERVER["REQUEST_METHOD"] === "GET" &&
+    isset($_GET["dirPath"]) &&
+    isset($_GET["idGuest"])
 ) {
-    $dirPath = urldecode($_GET["dirPath"]);
+    $dirPath        = urldecode($_GET["dirPath"]);
+    $idGuest        = (int) $_GET["idGuest"];
     $existSharedDir = false;
 
     foreach ($diccionarioSharedDirectory as $key => $value) {
-        if ($dirPath !== $value["path"]) continue;
+        if ($dirPath !== $value["path"] || $idGuest !== (int)$value["id_user_guest"]) {
+            continue;
+        }
+
         $existSharedDir = true;
 
-        $statement = $connection->prepare("DELETE FROM shared_directory WHERE id_user_property = :id AND path = :path AND id_user_guest = :id_user_guest");
+        $statement = $connection->prepare(
+            "DELETE FROM shared_directory
+             WHERE id_user_property = :id
+               AND path = :path
+               AND id_user_guest = :id_user_guest"
+        );
         $statement->execute([
-            ":path" => $value["path"],
-            ":id" => $_SESSION["user"]["id"],
-            ":id_user_guest" => $_GET["idGuest"]
+            ":path"          => $value["path"],
+            ":id"            => $userId,
+            ":id_user_guest" => $idGuest
         ]);
+
+        // Actualizar cache en memoria y en Redis
+        unset($diccionarioSharedDirectory[$key]);
+        $redis->setex(
+            $cacheKeySharedDirs,
+            60,
+            json_encode(array_values($diccionarioSharedDirectory))
+        );
 
         break;
     }
@@ -101,11 +185,10 @@ if (
     $dirPathMessages = basename($dirPath);
     if (!$existSharedDir) {
         $_SESSION["flash"] = [
-            "message" => "Error The Directory $dirPathMessages That You Want To Stop Sharing Does Not Belong To You Or Does Not Exist",
-            "class" => "alert alert-danger d-flex align-items-center",
+            "message"    => "Error The Directory $dirPathMessages That You Want To Stop Sharing Does Not Belong To You Or Does Not Exist",
+            "class"      => "alert alert-danger d-flex align-items-center",
             "aria-label" => "Danger:",
             "xlink:href" => "#exclamation-triangle-fill"
-            // Colour Red
         ];
 
         header("Location: ./manage_shared_data.php");
@@ -113,11 +196,10 @@ if (
     }
 
     $_SESSION["flash"] = [
-        "message" => "You Have Stopped Sharing The Directory $dirPathMessages",
-        "class" => "alert alert-success d-flex align-items-center",
+        "message"    => "You Have Stopped Sharing The Directory $dirPathMessages",
+        "class"      => "alert alert-success d-flex align-items-center",
         "aria-label" => "Success:",
         "xlink:href" => "#check-circle-fill"
-        // Colour Green
     ];
 
     header("Location: ./manage_shared_data.php");
@@ -173,16 +255,20 @@ if (
                 <?php foreach ($diccionarioSharedDirectory as $key => $value): ?>
                     <li>
                         <?php $params = http_build_query([
-                            "dirPath" => urlencode( addslashes( $value["path"] ) ),
+                            "dirPath" => urlencode(addslashes($value["path"])),
                             "idGuest" => $value["id_user_guest"]
                         ]); ?>
                         <div class="custom-flex">
                             <label>
                                 <strong>
-                                    <em>Name Directory: <?= $value["name"] ?> </em>
+                                    <em>Name Directory: <?= htmlspecialchars($value["name"]) ?> </em>
                                 </strong>
                             </label>
-                            <a type="submit" href="<?= $_SERVER['PHP_SELF'] . '?' . $params ?>" class="btn btn-primary m-3">Stop Sharing Directory (<?= $value["email"] ?>)</a>
+                            <a type="submit"
+                                href="<?= $_SERVER['PHP_SELF'] . '?' . $params ?>"
+                                class="btn btn-primary m-3">
+                                Stop Sharing Directory (<?= htmlspecialchars($value["email"]) ?>)
+                            </a>
                         </div>
                     </li>
                 <?php endforeach; ?>
@@ -197,16 +283,20 @@ if (
                 <?php foreach ($diccionarioSharedFiles as $key => $value): ?>
                     <li>
                         <?php $params = http_build_query([
-                            "filePath" => urlencode( addslashes( $value["path"] ) ),
-                            "idGuest" => $value["id_user_guest"]
+                            "filePath" => urlencode(addslashes($value["path"])),
+                            "idGuest"  => $value["id_user_guest"]
                         ]); ?>
                         <div class="custom-flex">
                             <label>
                                 <strong>
-                                    <em>Name File: <?= $value["name"] ?> </em>
+                                    <em>Name File: <?= htmlspecialchars($value["name"]) ?> </em>
                                 </strong>
                             </label>
-                            <a href="<?= $_SERVER['PHP_SELF'] . '?' . $params ?>" type="submit" class="btn btn-primary m-3">Stop Sharing File (<?= $value["email"] ?>)</a>
+                            <a href="<?= $_SERVER['PHP_SELF'] . '?' . $params ?>"
+                                type="submit"
+                                class="btn btn-primary m-3">
+                                Stop Sharing File (<?= htmlspecialchars($value["email"]) ?>)
+                            </a>
                         </div>
                     </li>
                 <?php endforeach; ?>

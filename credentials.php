@@ -5,58 +5,124 @@ session_start();
 if (!isset($_SESSION["user"])) {
     header("Location: ./register.php");
     exit();
-} else {
-    $connection = require "./sql/db.php";
-    $data_user =  $connection->query("SELECT * FROM users WHERE id = {$_SESSION['user']['id']} LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+}
+
+$connection = require "./sql/db.php";
+require_once "./sql/redis.php";
+
+$userId = (int) $_SESSION["user"]["id"];
+$redis  = redis_client();
+$cacheKeyUserProfile = sprintf('user:%d:profile', $userId);
+
+// =============================
+// Obtener datos del usuario
+// =============================
+$data_user = null;
+
+// 1) Intentar leer desde Redis
+$cachedUser = $redis->get($cacheKeyUserProfile);
+if ($cachedUser !== false) {
+    $decoded = json_decode($cachedUser, true);
+    if (is_array($decoded)) {
+        $data_user = $decoded;
+    }
+}
+
+// 2) Si no hay cache o no es válido -> BD
+if ($data_user === null) {
+    $stmt = $connection->query(
+        "SELECT * FROM users WHERE id = {$userId} LIMIT 1"
+    );
+    $data_user = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$data_user) {
+        // Usuario inválido en sesión
+        session_destroy();
+        header("Location: ./register.php");
+        exit();
+    }
+
     unset($data_user["password"]);
+
+    // Guardamos en cache (TTL 5 min, ajusta si quieres)
+    $redis->setex($cacheKeyUserProfile, 300, json_encode($data_user));
 }
 
 if ($_SERVER["REQUEST_METHOD"] === "POST" && !isset($_POST["theme"])) {
-    $name = $_POST["name"];
-    $email = $_POST["email"];
-    $password = $_POST["password"];
-    if (empty($name) || empty($email) || empty($password) || !str_contains($email, "@") || strlen($password) <= 7) {
+    $name     = $_POST["name"]    ?? '';
+    $email    = $_POST["email"]   ?? '';
+    $password = $_POST["password"] ?? '';
+
+    if (
+        empty($name) ||
+        empty($email) ||
+        empty($password) ||
+        !str_contains($email, "@") ||
+        strlen($password) <= 7
+    ) {
         $error = "Complete All Fields";
     } else {
 
-        // Sobrescribe el campo `email` con una cadena vacía ("") para el usuario actual.
-        // Esto puede ser útil en casos donde se necesite liberar el email asociado
-        // al usuario antes de realizar una validación o una nueva asignación.
-        $connection->query("UPDATE users SET email = '' WHERE id = {$_SESSION['user']['id']}");
-        $statement = $connection->prepare("SELECT email FROM users WHERE email = :email LIMIT 1");
-        $statement->bindParam(":email", $_POST["email"]);
+        // Liberar email actual temporalmente
+        $connection->query("UPDATE users SET email = '' WHERE id = {$userId}");
+
+        // Verificar si el nuevo email ya está tomado por otro usuario
+        $statement = $connection->prepare(
+            "SELECT email FROM users WHERE email = :email LIMIT 1"
+        );
+        $statement->bindParam(":email", $email);
         $statement->execute();
 
-        // No tiene que haber coincidencias, ya que estamos registrando un nuevo usuario.
         if ($statement->rowCount() > 0) {
             $error = "This Email Is Taken";
         } else {
-            $connection->prepare("UPDATE users SET name = :name, email = :email, password = :password WHERE id = :id")->execute([
-                ":name" => $_POST["name"],
-                ":email" => $_POST["email"],
-                ":password" => password_hash($_POST["password"], PASSWORD_BCRYPT),
-                ":id" => $_SESSION["user"]["id"]
-            ]);
+            // Actualizar credenciales
+            $connection
+                ->prepare(
+                    "UPDATE users
+                     SET name = :name,
+                         email = :email,
+                         password = :password
+                     WHERE id = :id"
+                )
+                ->execute([
+                    ":name"     => $name,
+                    ":email"    => $email,
+                    ":password" => password_hash($password, PASSWORD_BCRYPT),
+                    ":id"       => $userId,
+                ]);
 
-            // Delete Register Empty Table user_email_history
-            $connection->query("DELETE FROM user_email_history WHERE email = ''");
+            // Limpiar registros vacíos en user_email_history
+            $connection->query(
+                "DELETE FROM user_email_history WHERE email = ''"
+            );
 
-            $statement = $connection->prepare("SELECT * FROM users WHERE email = :email LIMIT 1");
-            $statement->bindParam(":email", $_POST["email"]);
+            // Volver a obtener el usuario actualizado
+            $statement = $connection->prepare(
+                "SELECT * FROM users WHERE email = :email LIMIT 1"
+            );
+            $statement->bindParam(":email", $email);
             $statement->execute();
 
             $user = $statement->fetch(PDO::FETCH_ASSOC);
             unset($user["password"]);
+
+            // Actualizar sesión
             $_SESSION["user"] = $user;
-            // ? https://getbootstrap.com/docs/5.3/components/alerts/#examples
+
+            // Actualizar cache del perfil
+            $redis->setex($cacheKeyUserProfile, 300, json_encode($user));
+
+            // Flash
             $_SESSION["flash"] = [
-                "message" => "Credentials Updated",
-                "class" => "alert alert-success d-flex align-items-center",
+                "message"    => "Credentials Updated",
+                "class"      => "alert alert-success d-flex align-items-center",
                 "aria-label" => "Success:",
-                "xlink:href" => "#check-circle-fill"
-                // Colour Green
+                "xlink:href" => "#check-circle-fill",
             ];
+
             header("Location: ./home.php");
+            exit();
         }
     }
 }
@@ -105,7 +171,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && !isset($_POST["theme"])) {
                                     id="inputName"
                                     name="name"
                                     required
-                                    value="<?= $data_user["name"] ?>"
+                                    value="<?= htmlspecialchars($data_user["name"]) ?>"
                                     placeholder="Daniel Benjamin Perez Morales"
                                     autocomplete="name"
                                     autofocus>
@@ -120,9 +186,9 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && !isset($_POST["theme"])) {
                                     id="inputEmail"
                                     name="email"
                                     required
-                                    value="<?= $data_user["email"] ?>"
+                                    value="<?= htmlspecialchars($data_user["email"]) ?>"
                                     placeholder="Daniel@gmail.com"
-                                    autocomplete="name"
+                                    autocomplete="email"
                                     autofocus>
                             </div>
                         </div>
@@ -139,8 +205,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && !isset($_POST["theme"])) {
                                     placeholder="********"
                                     minlength="8"
                                     maxlength="64"
-                                    autocomplete="name"
-                                    autofocus>
+                                    autocomplete="new-password">
                             </div>
                         </div>
                         <fieldset class="row mb-3">

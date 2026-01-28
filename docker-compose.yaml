@@ -59,6 +59,16 @@ services:
     profiles:
       - dev
 
+  redis:
+    image: redis:7.2-alpine
+    container_name: container-redis
+    expose:
+      - "6379/tcp"
+    networks:
+      - network
+    command: [ "redis-server", "--appendonly", "yes" ]
+    profiles:
+      - dev
 
 networks:
   network:

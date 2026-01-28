@@ -1,4 +1,5 @@
 <?php
+
 $host = 'db';
 $db   = 'local_drive';
 $user = 'postgres';

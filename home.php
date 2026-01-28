@@ -8,11 +8,15 @@ if (!isset($_SESSION["user"])) {
 $error = null;
 
 $connection = require_once "./sql/db.php";
+require_once "./sql/redis.php";
+
 require_once "./utils/functions.php";
 require_once "./utils/delete_file.php";
 require_once "./utils/upload_file.php";
 require_once "./utils/add_directory.php";
 require_once "./utils/directory_size.php";
+
+$redis = redis_client();
 
 $statement = $connection->prepare("SELECT * FROM directory WHERE id_user = :id_user");
 $statement->execute([
@@ -25,24 +29,26 @@ $directoryPrincipal = "{$listExistingDirectory[0]["path"]}";
 
 // List of valid directories
 $listOfValidDirectories = array();
-for ($i = 0; $i < count($listExistingDirectory); $i++) $listOfValidDirectories[] = addslashes($listExistingDirectory[$i]["path"]);
+for ($i = 0; $i < count($listExistingDirectory); $i++) {
+    $listOfValidDirectories[] = addslashes($listExistingDirectory[$i]["path"]);
+}
 
 if ($_SERVER["REQUEST_METHOD"] === "GET" && !isset($_SERVER["QUERY_STRING"])) {
     header("Location: .{$_SERVER['PHP_SELF']}?directory=$directoryPrincipal");
     exit();
 }
 
-
 $index = null;
 
 // * Esta Array Asociativo Almacena Los Query Params Con Su Key => Value Para Luego Verificar Que El Valor De La Key directory Es La Correspondiente
-
 if ($_SERVER["REQUEST_METHOD"] === "GET" && isset($_SERVER["QUERY_STRING"])) {
     $listQueryStringDirectory = array();
     parse_str($_SERVER["QUERY_STRING"], $listQueryStringDirectory);
 
-
-    if (!in_array("directory", array_keys($listQueryStringDirectory)) || !in_array($listQueryStringDirectory["directory"], $listOfValidDirectories)) {
+    if (
+        !in_array("directory", array_keys($listQueryStringDirectory)) ||
+        !in_array($listQueryStringDirectory["directory"], $listOfValidDirectories)
+    ) {
         header("Location: .{$_SERVER['PHP_SELF']}?directory=$directoryPrincipal");
         exit();
     }
@@ -79,6 +85,24 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_SESSION["directoryPath"])) 
 $listSubDirectory = array();
 $directoryUser = $listOfValidDirectories[$index];
 
+// Cachear tamaño del directorio principal en Redis con clave robusta
+$directorySizeCacheKey = sprintf(
+    'user:%d:directory:%s:size',
+    $_SESSION['user']['id'],
+    hash('sha256', $directoryUser) // hash robusto del path
+);
+
+$directorySizeBytes = null;
+
+$cachedDirectorySize = $redis->get($directorySizeCacheKey);
+if ($cachedDirectorySize !== false) {
+    $directorySizeBytes = (int) $cachedDirectorySize;
+} else {
+    $directorySizeBytes = folderSize($directoryUser);
+    // Cache con TTL de 60 segundos (ajusta a gusto)
+    $redis->setex($directorySizeCacheKey, 60, (string) $directorySizeBytes);
+}
+
 // * Obtenemos El Directorio Padre Filtrando Por El Directorio Actual Del User
 $statement = $connection->prepare("SELECT parent_directory FROM directory WHERE id_user = :id_user AND path = :path LIMIT 1");
 $statement->execute([
@@ -91,9 +115,13 @@ $parentDirectoryActual = $statement->fetch(PDO::FETCH_ASSOC)["parent_directory"]
 if (is_dir($directoryUser)) {
     foreach (new DirectoryIterator($directoryUser) as $index => $entry) {
         if ($entry->isDot()) continue;
-        if ($entry->isDir()) array_push($listSubDirectory, $entry->getFilename());
+        if ($entry->isDir()) {
+            $listSubDirectory[] = $entry->getFilename();
+        }
     }
-} else die("[x] El Directory No Existe: $directoryUser" . PHP_EOL);
+} else {
+    die("[x] El Directory No Existe: $directoryUser" . PHP_EOL);
+}
 
 $appRootDirectory = realpath(dirname(__FILE__));
 
@@ -103,7 +131,9 @@ $listFiles = [];
 
 foreach (new DirectoryIterator($directoryUser) as $indice => $file) {
     if ($file->isDot()) continue;
-    if ($file->isFile()) array_push($listFiles, $file->getFilename());
+    if ($file->isFile()) {
+        $listFiles[] = $file->getFilename();
+    }
 }
 ?>
 <?php require __DIR__ . "/partials/header.php" ?>
@@ -188,7 +218,8 @@ foreach (new DirectoryIterator($directoryUser) as $indice => $file) {
         <h1 class="justify-content-center align-items-center">Espacio Disponible</h1>
 
         <?php
-        $opcion = availableSpaceGb(folderSize($directoryUser));
+        // Usamos el valor cacheado del tamaño
+        $opcion = availableSpaceGb($directorySizeBytes);
         // Calcula el porcentaje de espacio utilizado
         $usedPercentage = 100 - ($opcion * 10);
         ?>
@@ -238,12 +269,15 @@ foreach (new DirectoryIterator($directoryUser) as $indice => $file) {
         <?php endif; ?>
     </div>
     <!-- 10 GB -> Bytes -> 10737418240   -->
-    <?php if (folderSize($directoryUser) < 10737418240): ?>
+    <?php if ($directorySizeBytes < 10737418240): ?>
         <div class="container mb-3 mt-4 pt-2 d-grid gap-2">
             <div class="alert alert-success alert-dismissible fade show" role="alert">
                 <strong>Hi <?= $_SESSION["user"]["email"] ?>!</strong>
                 <br>
-                <em>Tienes <?= availableSpaceMb(folderSize($directoryUser)); ?> Mb De Espacio Disponible. Puedes Subir Ficheros Con Un Peso Maximo De 3221225000 Bytes O Crear Directorios</em>
+                <em>
+                    Tienes <?= availableSpaceMb($directorySizeBytes); ?> Mb De Espacio Disponible.
+                    Puedes Subir Ficheros Con Un Peso Maximo De 3221225000 Bytes O Crear Directorios
+                </em>
                 <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
             </div>
         </div>
@@ -268,7 +302,7 @@ foreach (new DirectoryIterator($directoryUser) as $indice => $file) {
     <div class="container mb-3 mt-4 pt-2 d-grid gap-2">
         <hr>
         <!-- 10 GB -> Bytes -> 10737418240   -->
-        <?php if (folderSize($directoryUser) < 10737418240): ?>
+        <?php if ($directorySizeBytes < 10737418240): ?>
             <form class="row g-3" method="post" action="<?= htmlspecialchars($_SERVER['PHP_SELF']) ?>">
                 <div class="col-auto">
                     <input type="text"
@@ -286,7 +320,8 @@ foreach (new DirectoryIterator($directoryUser) as $indice => $file) {
             </form>
         <?php endif; ?>
         <?php if ($parentDirectoryActual !== $appRootDirectory): ?>
-            <?php $params = http_build_query([
+            <?php
+            $params = http_build_query([
                 "directory" => $parentDirectoryActual,
             ]);
             ?>
@@ -303,9 +338,29 @@ foreach (new DirectoryIterator($directoryUser) as $indice => $file) {
         <?php endif ?>
         <?php for ($i = 0; $i < count($listSubDirectory); $i++): ?>
             <div class="d-flex align-items-center justify-content-between mb-2">
-                <?php $params = http_build_query([
+                <?php
+                $params = http_build_query([
                     "directory" => addslashes($directoryUser . DIRECTORY_SEPARATOR . $listSubDirectory[$i]),
                 ]);
+
+                // Cachear tamaño de cada subdirectorio
+                $subDirPath = $directoryUser . DIRECTORY_SEPARATOR . $listSubDirectory[$i];
+
+                $subDirSizeCacheKey = sprintf(
+                    'user:%d:subdir:%s:size',
+                    $_SESSION['user']['id'],
+                    hash('sha256', $subDirPath)
+                );
+
+                $subDirSizeBytes = null;
+                $cachedSubDirSize = $redis->get($subDirSizeCacheKey);
+
+                if ($cachedSubDirSize !== false) {
+                    $subDirSizeBytes = (int) $cachedSubDirSize;
+                } else {
+                    $subDirSizeBytes = folderSize($subDirPath);
+                    $redis->setex($subDirSizeCacheKey, 60, (string) $subDirSizeBytes);
+                }
                 ?>
                 <!-- Botón grande -->
                 <a
@@ -318,7 +373,7 @@ foreach (new DirectoryIterator($directoryUser) as $indice => $file) {
                         <?= htmlspecialchars($_SESSION['user']['email']) ?>
                     </span>
                     <span class="me-2">Size:
-                        <?= sizeFormat(folderSize($directoryUser . DIRECTORY_SEPARATOR . $listSubDirectory[$i])); ?>
+                        <?= sizeFormat($subDirSizeBytes); ?>
                     </span>
                     <img style="width: 2.0rem;" src="./static/icon/directory.png" alt="Icon Directory">
                 </a>
@@ -332,7 +387,8 @@ foreach (new DirectoryIterator($directoryUser) as $indice => $file) {
                             alt="Remove Directory">
                     </button>
                 </form>
-                <?php $params = http_build_query([
+                <?php
+                $params = http_build_query([
                     "shareDirectory" => urlencode($directoryUser . '/' . $listSubDirectory[$i]),
                     "id" => $_SESSION['user']['id']
                 ]);
@@ -350,14 +406,35 @@ foreach (new DirectoryIterator($directoryUser) as $indice => $file) {
 
     <?php foreach ($listFiles as $indice => $file): ?>
         <?php
-        $statement = $connection->prepare(
-            "SELECT name, type, path, size, file_creation_date FROM files WHERE id_user = :id AND name = :name LIMIT 1"
+        // Cachear metadatos del fichero
+        $fileMetaCacheKey = sprintf(
+            'user:%d:file:%s:meta',
+            $_SESSION['user']['id'],
+            hash('sha256', $file)
         );
-        $statement->execute([
-            ":id" => $_SESSION['user']['id'],
-            ":name" => $file,
-        ]);
-        $data = $statement->fetch(PDO::FETCH_ASSOC);
+
+        $data = null;
+        $cachedFileMeta = $redis->get($fileMetaCacheKey);
+
+        if ($cachedFileMeta !== false) {
+            $data = json_decode($cachedFileMeta, true);
+        } else {
+            $statement = $connection->prepare(
+                "SELECT name, type, path, size, file_creation_date 
+                 FROM files 
+                 WHERE id_user = :id AND name = :name 
+                 LIMIT 1"
+            );
+            $statement->execute([
+                ":id" => $_SESSION['user']['id'],
+                ":name" => $file,
+            ]);
+            $data = $statement->fetch(PDO::FETCH_ASSOC) ?: [];
+
+            if (!empty($data)) {
+                $redis->setex($fileMetaCacheKey, 60, json_encode($data));
+            }
+        }
         ?>
         <div class="container pt-4 p-3">
             <div class="row">
@@ -415,10 +492,11 @@ foreach (new DirectoryIterator($directoryUser) as $indice => $file) {
                                     <?php endif; ?>
 
                                     <?php if (isset($data["type"])): ?>
-                                        <?php require_once "./utils/list.php";
+                                        <?php
+                                        require_once "./utils/list.php";
                                         if (in_array($data["type"], $listContentType)): ?>
                                             <a href="serve_file.php?file=<?= urlencode($data['path']) ?>&id=<?= $_SESSION['user']['id'] ?>"
-                                            class="card-link">Ver Contenido</a>
+                                                class="card-link">Ver Contenido</a>
                                         <?php endif; ?>
                                     <?php endif; ?>
 
@@ -427,7 +505,8 @@ foreach (new DirectoryIterator($directoryUser) as $indice => $file) {
                                             class="card-link">Eliminar</a>
                                     <?php endif; ?>
 
-                                    <?php if (isset($data["path"])) {
+                                    <?php
+                                    if (isset($data["path"])) {
                                         $params = http_build_query([
                                             "sharedFile" => urlencode($data["path"]),
                                             "id" => $_SESSION['user']['id']
