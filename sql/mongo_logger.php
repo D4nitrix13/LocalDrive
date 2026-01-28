@@ -29,8 +29,6 @@ function log_event(string $type, array $payload = []): void
 
         $collection->insertOne($doc);
     } catch (Throwable $e) {
-        // En producción lo ideal es otro canal de error,
-        // pero nunca romper la app por fallo de log.
         error_log('[MONGO_LOG_ERROR] ' . $e->getMessage());
     }
 }
