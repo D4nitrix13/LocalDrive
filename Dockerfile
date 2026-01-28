@@ -28,7 +28,7 @@ COPY --chown=d4nitrix13:d4nitrix13 ./ ./
 RUN ["mv", "./config/apache2.conf", "/etc/apache2/apache2.conf"]
 
 # Copiar dockerize desde el stage anterior
-COPY --from=dockerize /usr/local/bin/dockerize /usr/local/bin/dockerize
+COPY --from=dockerize /bin/dockerize /usr/local/bin/dockerize
 
 # HEALTHCHECK usando el nombre del servicio en lugar de la IP
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
