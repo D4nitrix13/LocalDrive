@@ -24,7 +24,7 @@ services:
     networks:
       - network
     ports:
-      - "5433:5432/tcp" # host:container
+      - "15432:5432/tcp" # host:container
     profiles:
       - dev
 
