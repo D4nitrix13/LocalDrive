@@ -16,6 +16,8 @@ services:
       - POSTGRES_PASSWORD
     environment:
       POSTGRES_PASSWORD_FILE: /run/secrets/POSTGRES_PASSWORD
+      POSTGRES_DB: local_drive
+      POSTGRES_USER: postgres
     expose:
       - "5432/tcp"
     pull_policy: always
@@ -30,6 +32,8 @@ services:
     container_name: container-app
     depends_on:
       - db
+      - redis
+      - mongo
     build:
       context: ./
       dockerfile: Dockerfile
@@ -40,8 +44,26 @@ services:
       - "80/tcp"
     volumes:
       - data:/var/www/html/
+    environment:
+      # Postgres
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: local_drive
+      DB_USER: postgres
+      DB_PASSWORD_FILE: /run/secrets/POSTGRES_PASSWORD
+
+      # Redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: s3cureRedisP@ss
+
+      # Mongo (para logs)
+      MONGO_URI: mongodb://mongo_user:mongo_password@mongo:27017/localdrive_logs?authSource=admin
+    secrets:
+      - POSTGRES_PASSWORD
     profiles:
       - dev
+
   nginx:
     container_name: container-nginx
     image: nginx:1.27-alpine
@@ -66,7 +88,79 @@ services:
       - "6379/tcp"
     networks:
       - network
-    command: [ "redis-server", "--appendonly", "yes" ]
+    command: [ "redis-server", "--appendonly", "yes", "--requirepass", "s3cureRedisP@ss" ]
+    profiles:
+      - dev
+
+  # Panel para Redis
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: container-redis-commander
+    depends_on:
+      - redis
+    environment:
+      # formato: name:host:port:db:password
+      REDIS_HOSTS: "local:redis:6379:0:s3cureRedisP@ss"
+    ports:
+      - "8082:8081" # host:container (UI de redis-commander)
+    networks:
+      - network
+    profiles:
+      - dev
+
+  # MongoDB para logs
+  mongo:
+    image: mongo:7
+    container_name: container-mongo
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: mongo_user
+      MONGO_INITDB_ROOT_PASSWORD: mongo_password
+      MONGO_INITDB_DATABASE: localdrive_logs
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - network
+    profiles:
+      - dev
+
+  # Panel para Mongo (Mongo Express)
+  mongo-express:
+    image: mongo-express
+    container_name: container-mongo-express
+    restart: unless-stopped
+    depends_on:
+      - mongo
+    environment:
+      ME_CONFIG_MONGODB_SERVER: mongo
+      ME_CONFIG_MONGODB_PORT: 27017
+      ME_CONFIG_MONGODB_ADMINUSERNAME: mongo_user
+      ME_CONFIG_MONGODB_ADMINPASSWORD: mongo_password
+      ME_CONFIG_BASICAUTH_USERNAME: admin
+      ME_CONFIG_BASICAUTH_PASSWORD: admin123
+    ports:
+      - "8081:8081"
+    networks:
+      - network
+    profiles:
+      - dev
+
+  # Panel para PostgreSQL (pgAdmin)
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: container-pgadmin
+    restart: unless-stopped
+    depends_on:
+      - db
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@localdrive.test
+      PGADMIN_DEFAULT_PASSWORD: admin123
+    ports:
+      - "5050:80" # host:container (UI pgAdmin)
+    networks:
+      - network
     profiles:
       - dev
 
@@ -76,4 +170,6 @@ networks:
 
 volumes:
   data:
+    driver: local
+  mongo_data:
     driver: local

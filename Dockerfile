@@ -23,8 +23,8 @@ RUN apt-get update && \
         tini \
         $PHPIZE_DEPS && \
     docker-php-ext-install pdo_pgsql && \
-    pecl install redis && \
-    docker-php-ext-enable redis && \
+    pecl install redis mongodb && \
+    docker-php-ext-enable redis mongodb && \
     mkdir -p /var/www/html/logs && \
     touch /var/www/html/logs/access.log /var/www/html/logs/error.log && \
     useradd -m d4nitrix13 && \

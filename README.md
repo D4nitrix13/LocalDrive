@@ -169,6 +169,96 @@ cat secrets/POSTGRES_PASSWORD.txt
 
 **Nota:** *Evita compartir este archivo o subirlo a repositorios públicos para mantener la seguridad. También puedes usar `.gitignore` para excluirlo del control de versiones.*
 
+---
+
+## **Script de Gestión – `localdrive.sh`**
+
+Para facilitar la administración del proyecto **LocalDrive**, se incluye un script que permite **levantar, detener, reiniciar, eliminar e inicializar** la aplicación completa con un solo comando.
+
+Este script automatiza los comandos de Docker Compose, la creación de secretos y la inicialización de la base de datos.
+
+---
+
+## **📍 1. Dar permisos de ejecución**
+
+Antes de usarlo, asegúrate de darle permisos de ejecución:
+
+```bash
+chmod +x localdrive.sh
+```
+
+---
+
+## **2. Comandos disponibles**
+
+| Comando                  | Descripción                                                                                      |
+| ------------------------ | ------------------------------------------------------------------------------------------------ |
+| `./localdrive.sh init`   | Crea el secreto de PostgreSQL si no existe, levanta los servicios e inicializa la base de datos. |
+| `./localdrive.sh up`     | Construye y levanta los contenedores en segundo plano.                                           |
+| `./localdrive.sh stop`   | Detiene los contenedores sin eliminarlos.                                                        |
+| `./localdrive.sh start`  | Inicia nuevamente los contenedores previamente detenidos.                                        |
+| `./localdrive.sh down`   | Apaga y elimina contenedores, redes, volúmenes e imágenes locales.                               |
+| `./localdrive.sh db`     | Ejecuta únicamente el script SQL de inicialización de base de datos.                             |
+| `./localdrive.sh status` | Muestra el estado actual de los contenedores del proyecto.                                       |
+
+---
+
+## **📍 3. Flujo recomendado (primera vez)**
+
+Ejecuta:
+
+```bash
+./localdrive.sh init
+```
+
+Este comando:
+
+1. Verifica o crea el archivo `secrets/POSTGRES_PASSWORD.txt`
+2. Levanta los servicios con Docker
+3. Inicializa la base de datos ejecutando `/App/sql/setup.sql`
+
+---
+
+## **📍 4. Ejemplos de uso diario**
+
+**Levantar la aplicación:**
+
+```bash
+./localdrive.sh up
+```
+
+**Detenerla:**
+
+```bash
+./localdrive.sh stop
+```
+
+**Reiniciar contenedores ya existentes:**
+
+```bash
+./localdrive.sh start
+```
+
+**Ver el estado:**
+
+```bash
+./localdrive.sh status
+```
+
+**Eliminar todo (contenedores + volúmenes + imágenes locales):**
+
+```bash
+./localdrive.sh down
+```
+
+**Reinicializar base de datos manualmente:**
+
+```bash
+./localdrive.sh db
+```
+
+---
+
 ### **1. Clonar el repositorio**  
 
 *Para obtener el código fuente del proyecto, clona el repositorio desde GitHub con el siguiente comando:*
